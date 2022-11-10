@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license-file = "LICENSE"
 description = "Play snake in the terminal"
+repository = "https://github.com/ch1zzzzz/Terminal-Snake"
 readme = "README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
