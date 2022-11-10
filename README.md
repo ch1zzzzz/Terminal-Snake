@@ -5,3 +5,6 @@ Play snake in the terminal.
 - Navigate the menues with the arrow keys and accept with enter
 - Change the snakes direction with the arrow keys
 - pause the game with esc
+
+## Installation
+type `cargo install terminal-snake`
