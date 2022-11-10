@@ -1,0 +1,455 @@
+use rand::random;
+use crossterm::{
+    execute,
+    cursor::{
+        Hide,
+        Show,
+        MoveTo
+    },
+    terminal::{
+        self,
+        enable_raw_mode,
+        disable_raw_mode,
+        EnterAlternateScreen,
+        LeaveAlternateScreen,
+        SetTitle,
+        Clear,
+        size
+    },
+    style::{
+        SetBackgroundColor,
+        SetForegroundColor,
+        ResetColor,
+        Color,
+        Print
+    },
+    event::{
+        read,
+        poll,
+        Event,
+        KeyCode
+    },
+    Result
+};
+use std::{
+    time::{
+        Duration, 
+        Instant
+    },
+    io::{
+        self, 
+        stdout, 
+        Stdout
+    }
+};
+
+#[derive(Clone, PartialEq, Eq)]
+enum Direction {
+    Up,
+    Down,
+    Left,
+    Right
+}
+
+impl Direction {
+    fn kind(&self) -> DirectionKind {
+        match self {
+            Direction::Up => DirectionKind::Vertical,
+            Direction::Down => DirectionKind::Vertical,
+            _ => DirectionKind::Horizontal
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum DirectionKind {
+    Horizontal,
+    Vertical
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct SnakeGameCord {
+    x: usize,
+    y: usize
+}
+
+impl SnakeGameCord {
+    fn new(x: usize, y: usize) -> SnakeGameCord {
+        SnakeGameCord { x, y }
+    }
+
+    fn move_direction(&mut self, direction: &Direction) {
+        match direction {
+            Direction::Up => self.y -= 1,
+            Direction::Down => self.y += 1,
+            Direction::Left => self.x -= 1,
+            Direction::Right => self.x += 1
+        }
+    }
+
+    fn moved_direction(&self, direction: &Direction) -> SnakeGameCord {
+        let mut new_cord = self.clone();
+
+        new_cord.move_direction(direction);
+
+        new_cord
+    }
+}
+
+struct SnakeGame {
+    data: Vec<Vec<i32>>,
+    snake_head_pos: SnakeGameCord,
+    snake_len: u32,
+    snake_saturation_len: u32,
+    grew_last_tick: bool,
+    dead: bool,
+    game_grow_rate: u32,
+    max_apple_count: u32,
+    min_apple_count: u32,
+    ticks_between_apple_spawn: u32,
+    ticks_since_last_apple_spawned: u32
+}
+
+impl SnakeGame {
+    fn create(width: usize, height: usize, game_grow_rate: u32, max_apple_count: u32, min_apple_count: u32, ticks_between_apple_spawn: u32) -> SnakeGame {
+        let row = vec![0].repeat(width);
+
+        let mut data = vec![];
+
+        for _ in 0..height {
+            data.push(row.clone());
+        }
+
+        SnakeGame { 
+            data, 
+            snake_head_pos: SnakeGameCord { x: width/3, y: height/2 }, 
+            snake_len: 0,
+            snake_saturation_len: 3,
+            grew_last_tick: true,
+            dead: false,
+            game_grow_rate,
+            max_apple_count,
+            min_apple_count,
+            ticks_between_apple_spawn,
+            ticks_since_last_apple_spawned: 0
+        }
+    }
+
+    fn tick(&mut self, direction: &Direction) {
+        /*
+            1. Is move in bounds
+            2. Is move into snake
+            3. Is move into apple
+            4. Shorten tail
+            5. Put head
+            6. Respawn apple
+        */
+
+        // is move in bounds
+        if self.would_move_out_of_bounds(direction) {
+            self.dead = true;
+            return;
+        }
+
+        let new_head_pos = self.snake_head_pos.moved_direction(direction);
+
+        let value_at_new_head_pos = self.data[new_head_pos.y][new_head_pos.x];
+
+        // is move into body
+        if value_at_new_head_pos > 0 {
+            self.dead = true;
+            return;
+        }
+
+        // is move into apple
+        if value_at_new_head_pos == -1 {
+            self.snake_saturation_len += self.game_grow_rate;
+        }
+
+        // shorten tail
+        if self.snake_len < self.snake_saturation_len && ! self.grew_last_tick {
+            self.snake_len += 1;
+            self.grew_last_tick = true;
+        } else {
+            self.shorten_snake();
+            self.grew_last_tick = false;
+        }
+
+        // put head
+        self.data[new_head_pos.y][new_head_pos.x] = self.snake_len as i32;
+        self.snake_head_pos = new_head_pos;
+
+        // respawn apple
+        let apple_count = self.count_apples();
+
+        if apple_count < self.max_apple_count {
+            self.ticks_since_last_apple_spawned += 1;
+
+            if self.ticks_since_last_apple_spawned > self.ticks_between_apple_spawn || apple_count < self.min_apple_count {
+                self.ticks_since_last_apple_spawned = 0;
+
+                self.spawn_apple();
+            }
+        }
+
+    }
+
+    fn would_move_out_of_bounds(&self, direction: &Direction) -> bool {
+        match direction {
+            Direction::Up => if self.snake_head_pos.y == 0 {
+                return true
+            },
+            Direction::Down => if self.snake_head_pos.y + 1 == self.data.len() {
+                return true
+            },
+            Direction::Left => if self.snake_head_pos.x == 0 {
+                return true
+            },
+            Direction::Right => if self.snake_head_pos.x + 1 == self.data[0].len() {
+                return true
+            }
+        }
+        
+        false
+    }
+
+    fn shorten_snake(&mut self) {
+        for row in &mut self.data {
+            for col in row {
+                if *col > 0 {
+                    *col -= 1;
+                }
+            }
+        }
+    }
+
+    fn count_apples(&self) -> u32 {
+        let mut counter : u32 = 0;
+
+        for row in &self.data {
+            for col in row {
+                if *col == -1 {
+                    counter += 1;
+                }
+            }
+        }
+
+        counter
+    }
+
+    fn count_free(&self) -> u32 {
+        let mut counter : u32 = 0;
+
+        for row in &self.data {
+            for col in row {
+                if *col == 0 {
+                    counter += 1;
+                }
+            }
+        }
+
+        counter
+    }
+
+    fn spawn_apple(&mut self) {
+        let free = self.count_free();
+        let pos = random::<u32>() % free;
+
+        let mut count = 1;
+
+        for row in &mut self.data {
+            for col in row {
+                if *col == 0 {
+                    if count == pos {
+                        *col = -1;
+                        return;
+                    }
+                    count += 1;
+                }
+            }
+        }
+    }
+}
+
+fn display_game(stdout: &mut Stdout, game: &SnakeGame) -> Result<()> {
+    execute!(stdout, MoveTo(0, 0), Print(String::from("#").repeat(game.data[0].len() + 2)))?;
+
+    for (y, row) in game.data.iter().enumerate() {
+        execute!(stdout, MoveTo(0, y as u16 + 1), Print("#"))?;
+
+        for col in row {
+            match *col {
+                -1 => execute!(stdout, SetForegroundColor(Color::Red), Print("0"), SetForegroundColor(Color::White))?,
+                0 => execute!(stdout, Print(" "))?,
+                _ => execute!(stdout, SetForegroundColor(Color::Green), Print("+"), SetForegroundColor(Color::White))?
+            }
+        }
+
+        execute!(stdout, Print("#"))?;
+    }
+
+    execute!(stdout, MoveTo(0, game.data.len() as u16 + 2), Print(String::from("#").repeat(game.data[0].len() + 2)))?;
+
+    Ok(())
+}
+
+// the width and height are the inner width and height
+fn menue(stdout: &mut Stdout, width: u16, height: u16, items: &[&str]) -> Result<String> {
+    let mut selected = 0;
+
+    loop {
+        let (s_width, s_height) = size()?;
+
+        // top left corner
+        let margin_left = (s_width - width - 2) / 2;
+        let margin_top = (s_height - height - 2) / 2;
+
+        // draw square
+        let bar = String::from("#").repeat((width + 2) as usize);
+        let inner_bar = format!("#{}#", String::from(" ").repeat(width as usize));
+
+        execute!(
+            stdout,
+            MoveTo(margin_left, margin_top),
+            Print(&bar),
+            MoveTo(margin_left, margin_top + height + 1),
+            Print(bar),
+        )?;
+
+        for y in 1..(height + 1) {
+            execute!(stdout, MoveTo(margin_left, margin_top + y), Print(&inner_bar))?;
+        }
+
+        // draw entries
+        let spacing = (height as usize - items.len()) / (items.len() + 1);
+
+        for (i, item) in items.iter().enumerate() {
+            execute!(stdout, MoveTo(margin_left + (width - item.len() as u16) / 2 + 1, margin_top + ((i as u16 + 1) * (spacing as u16)) + 1 + i as u16))?;
+
+            if i == selected {
+                execute!(stdout, SetBackgroundColor(Color::White), SetForegroundColor(Color::Black))?;
+            }
+
+            execute!(stdout, Print(item), SetBackgroundColor(Color::Black), SetForegroundColor(Color::White))?;
+        }
+
+        // process events
+        match read()? {
+            Event::Key(keyevent) => match keyevent.code {
+                KeyCode::Down => if selected < items.len() - 1 {
+                    selected += 1;
+                },
+                KeyCode::Up => if selected > 0 {
+                    selected -= 1;
+                },
+                KeyCode::Enter => {
+                    return Ok(String::from(items[selected]));
+                },
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+}
+
+fn main() -> Result<()> {
+    let mut stdout = stdout();
+    
+    let (cols, rows) = size()?;
+
+    execute!(stdout, Hide, SetBackgroundColor(Color::Black), SetForegroundColor(Color::White), EnterAlternateScreen, SetTitle("Terminal Snake"))?;
+
+    enable_raw_mode()?;
+
+    let mut game = SnakeGame::create((cols - 2).into(), (rows - 2).into(), 8, 8, 1, 20);
+
+    let mut direction = Direction::Right;
+
+    let mut queue = vec![];
+
+    for _ in 0..3 {
+        game.tick(&direction);
+    }
+
+    while ! game.dead {
+        let now = Instant::now();
+
+        while poll(Duration::from_secs(0))? {
+            
+            match read()? {
+                Event::Key(key_event) => {
+                    match key_event.code {
+                        KeyCode::Up => queue.push(Direction::Up),
+                        KeyCode::Down => queue.push(Direction::Down),
+                        KeyCode::Left => queue.push(Direction::Left),
+                        KeyCode::Right => queue.push(Direction::Right),
+                        KeyCode::Esc => match menue(&mut stdout, 32, 9, &["CONTINUE", "EXIT"])?.as_str() {
+                            "CONTINUE" => {},
+                            "EXIT" => {
+                                game.dead = true;
+                            },
+                            _ => {}
+                        },
+                        _ => {}
+                    }
+                },
+                _ => {}
+            }
+        }
+
+        let mut iter = queue.iter();
+
+        'select_next_relevant_queue_result: loop {
+            match iter.next() {
+                Some(dir) => if dir.kind() != direction.kind() {
+                    direction = dir.clone();
+                    break 'select_next_relevant_queue_result;
+                },
+                None => {
+                    break 'select_next_relevant_queue_result;
+                }
+            }
+        }
+
+        let mut new_queue = vec![];
+
+        'collect_remaining: loop {
+            match iter.next() {
+                Some(dir) => new_queue.push(dir.clone()),
+                None => {
+                    break 'collect_remaining;
+                }
+            }
+        }
+
+        queue = new_queue;
+
+        game.tick(&direction);
+        display_game(&mut stdout, &game)?;
+
+        while now.elapsed() < Duration::from_millis(if direction.kind() == DirectionKind::Horizontal {
+            100
+        } else {
+            150
+        }) {}
+    }
+
+    disable_raw_mode()?;
+
+    execute!(stdout, Show, ResetColor, LeaveAlternateScreen)?;
+
+    Ok(())
+}
+
+/* 
+    TODO
+    - retry
+    - score
+    - settings
+    - shorten instead of die mode
+    - adapt to screen size
+
+    Done
+    - color
+    - esc & pause menue
+*/
