@@ -7,13 +7,11 @@ use crossterm::{
         MoveTo
     },
     terminal::{
-        self,
         enable_raw_mode,
         disable_raw_mode,
         EnterAlternateScreen,
         LeaveAlternateScreen,
         SetTitle,
-        Clear,
         size
     },
     style::{
@@ -37,7 +35,6 @@ use std::{
         Instant
     },
     io::{
-        self, 
         stdout, 
         Stdout
     }
@@ -74,10 +71,6 @@ struct SnakeGameCord {
 }
 
 impl SnakeGameCord {
-    fn new(x: usize, y: usize) -> SnakeGameCord {
-        SnakeGameCord { x, y }
-    }
-
     fn move_direction(&mut self, direction: &Direction) {
         match direction {
             Direction::Up => self.y -= 1,
