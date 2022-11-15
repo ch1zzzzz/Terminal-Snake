@@ -12,7 +12,9 @@ use crossterm::{
         EnterAlternateScreen,
         LeaveAlternateScreen,
         SetTitle,
-        size
+        size,
+        Clear,
+        ClearType
     },
     style::{
         SetBackgroundColor,
@@ -262,13 +264,46 @@ impl SnakeGame {
             }
         }
     }
+
+    fn clear(&mut self) {
+        for row in &mut self.data {
+            for col in row {
+                *col = 0;
+            }
+        }
+
+        self.snake_head_pos = SnakeGameCord { x: (self.data[0].len() / 3) * 2, y: self.data.len() / 2 };
+        self.snake_len = 0;
+        self.snake_saturation_len = 3;
+        self.grew_last_tick = true;
+        self.dead = false;
+    }
+}
+
+fn calculate_margins(width: u16, height: u16) -> Result<(u16, u16)> {
+    let (s_width, s_height) = size()?;
+
+    let width = if width + 2 > s_width {
+        s_width - 2
+    } else {
+        width
+    };
+    let height = if height + 2 > s_height {
+        s_height - 2
+    } else {
+        height
+    };
+
+    Ok(((s_width - width - 2) / 2, (s_height - height - 2) / 2))
 }
 
 fn display_game(stdout: &mut Stdout, game: &SnakeGame) -> Result<()> {
-    execute!(stdout, MoveTo(0, 0), Print(String::from("#").repeat(game.data[0].len() + 2)))?;
+    let (margin_left, margin_top) = calculate_margins(game.data[0].len() as u16, game.data.len() as u16)?;
+    
+    execute!(stdout, MoveTo(margin_left, margin_top), Print(String::from("#").repeat(game.data[0].len() + 2)))?;
 
     for (y, row) in game.data.iter().enumerate() {
-        execute!(stdout, MoveTo(0, y as u16 + 1), Print("#"))?;
+        execute!(stdout, MoveTo(margin_left, y as u16 + 1 + margin_top), Print("#"))?;
 
         for col in row {
             match *col {
@@ -281,26 +316,28 @@ fn display_game(stdout: &mut Stdout, game: &SnakeGame) -> Result<()> {
         execute!(stdout, Print("#"))?;
     }
 
-    execute!(stdout, MoveTo(0, game.data.len() as u16 + 2), Print(String::from("#").repeat(game.data[0].len() + 2)))?;
+    execute!(stdout, MoveTo(margin_left, game.data.len() as u16 + 1 + margin_top), Print(String::from("#").repeat(game.data[0].len() + 2)))?;
 
     Ok(())
 }
 
+
+
 // the width and height are the inner width and height
-fn menue(stdout: &mut Stdout, width: u16, height: u16, items: &[&str]) -> Result<String> {
+fn menue(stdout: &mut Stdout, width: u16, height: u16, title: Option<&str>, items: &[&str]) -> Result<String> {
     let mut selected = 0;
 
+    execute!(stdout, Clear(ClearType::All))?;
+    
     loop {
-        let (s_width, s_height) = size()?;
+        let (margin_left, mut margin_top) = calculate_margins(width, height)?;
+        let mut height = height;
 
-        // top left corner
-        let margin_left = (s_width - width - 2) / 2;
-        let margin_top = (s_height - height - 2) / 2;
-
-        // draw square
+        // lines
         let bar = String::from("#").repeat((width + 2) as usize);
         let inner_bar = format!("#{}#", String::from(" ").repeat(width as usize));
 
+        //draw square
         execute!(
             stdout,
             MoveTo(margin_left, margin_top),
@@ -311,6 +348,22 @@ fn menue(stdout: &mut Stdout, width: u16, height: u16, items: &[&str]) -> Result
 
         for y in 1..(height + 1) {
             execute!(stdout, MoveTo(margin_left, margin_top + y), Print(&inner_bar))?;
+        }
+
+        // title
+        match &title {
+            Some(title_text) => {
+                execute!(
+                    stdout, 
+                    MoveTo(margin_left + (width - title_text.len() as u16) / 2 + 1, margin_top + 1), 
+                    SetForegroundColor(Color::Green), 
+                    Print(title_text), 
+                    SetForegroundColor(Color::White)
+                )?;
+                height -= 1;
+                margin_top += 1;
+            },
+            _ => {}
         }
 
         // draw entries
@@ -345,86 +398,131 @@ fn menue(stdout: &mut Stdout, width: u16, height: u16, items: &[&str]) -> Result
     }
 }
 
+fn play_game(stdout: &mut Stdout, game: &mut SnakeGame) -> Result<()> {
+    'retry: loop {
+        let mut direction = Direction::Right;
+
+        let mut queue = vec![];
+
+        execute!(stdout, Clear(ClearType::All))?;
+
+        for _ in 0..3 {
+            game.tick(&direction);
+        }
+
+        while ! game.dead {
+            let now = Instant::now();
+
+            while poll(Duration::from_secs(0))? {
+                
+                match read()? {
+                    Event::Key(key_event) => {
+                        match key_event.code {
+                            KeyCode::Up => queue.push(Direction::Up),
+                            KeyCode::Down => queue.push(Direction::Down),
+                            KeyCode::Left => queue.push(Direction::Left),
+                            KeyCode::Right => queue.push(Direction::Right),
+                            KeyCode::Esc => match menue(stdout, 32, 9, None, &["CONTINUE", "EXIT"])?.as_str() {
+                                "CONTINUE" => {},
+                                "EXIT" => break 'retry,
+                                _ => {}
+                            },
+                            _ => {}
+                        }
+                    },
+                    _ => {}
+                }
+            }
+
+            let mut iter = queue.iter();
+
+            'select_next_relevant_queue_result: loop {
+                match iter.next() {
+                    Some(dir) => if dir.kind() != direction.kind() {
+                        direction = dir.clone();
+                        break 'select_next_relevant_queue_result;
+                    },
+                    None => {
+                        break 'select_next_relevant_queue_result;
+                    }
+                }
+            }
+
+            let mut new_queue = vec![];
+
+            'collect_remaining: loop {
+                match iter.next() {
+                    Some(dir) => new_queue.push(dir.clone()),
+                    None => {
+                        break 'collect_remaining;
+                    }
+                }
+            }
+
+            queue = new_queue;
+
+            game.tick(&direction);
+            display_game(stdout, &game)?;
+
+            while now.elapsed() < Duration::from_millis(if direction.kind() == DirectionKind::Horizontal {
+                100
+            } else {
+                150
+            }) {}
+        }
+
+        'viewing: loop {
+            match menue(stdout, 32, 8, Some(format!("You got to a length of {}", game.snake_len).as_str()), &["RETRY", "VIEW", "EXIT"])?.as_str() {
+                "RETRY" => {
+                    game.clear();
+                    break 'viewing;
+                },
+                "VIEW" => {
+                    display_game(stdout, game)?;
+                    wait_for_any_key_press()?;
+                },
+                _ => break 'retry
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn wait_for_any_key_press() -> Result<()> {
+    'wait: loop {
+        match read()? {
+            Event::Key(_) => break 'wait,
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let mut stdout = stdout();
-    
-    let (cols, rows) = size()?;
 
     execute!(stdout, Hide, SetBackgroundColor(Color::Black), SetForegroundColor(Color::White), EnterAlternateScreen, SetTitle("Terminal Snake"))?;
 
     enable_raw_mode()?;
 
-    let mut game = SnakeGame::create((cols - 2).into(), (rows - 2).into(), 8, 8, 1, 20);
-
-    let mut direction = Direction::Right;
-
-    let mut queue = vec![];
-
-    for _ in 0..3 {
-        game.tick(&direction);
-    }
-
-    while ! game.dead {
-        let now = Instant::now();
-
-        while poll(Duration::from_secs(0))? {
+    'application: loop {
+        'selection: loop {
+            let game = &mut match menue(&mut stdout, 100, 12, Some("T E R M I N A L   S N A K E"), &["CLASSIC", "MODE", "QUIT"])?.as_str() {
+                "CLASSIC" => SnakeGame::create(80, 20, 1, 1, 1, 100),
+                "MODE" => match menue(&mut stdout, 80, 20, None, &["FULLSCREEN", "BACK"])?.as_str() {
+                    "FULLSCREEN" => {
+                        let (cols, rows) = size()?;
+                        SnakeGame::create((cols - 2).into(), (rows - 2).into(), 8, 8, 1, 20)
+                    },
+                    _ => break 'selection
+                } 
+                _ => break 'application
+            };
             
-            match read()? {
-                Event::Key(key_event) => {
-                    match key_event.code {
-                        KeyCode::Up => queue.push(Direction::Up),
-                        KeyCode::Down => queue.push(Direction::Down),
-                        KeyCode::Left => queue.push(Direction::Left),
-                        KeyCode::Right => queue.push(Direction::Right),
-                        KeyCode::Esc => match menue(&mut stdout, 32, 9, &["CONTINUE", "EXIT"])?.as_str() {
-                            "CONTINUE" => {},
-                            "EXIT" => {
-                                game.dead = true;
-                            },
-                            _ => {}
-                        },
-                        _ => {}
-                    }
-                },
-                _ => {}
-            }
+            play_game(&mut stdout, game)?;
         }
-
-        let mut iter = queue.iter();
-
-        'select_next_relevant_queue_result: loop {
-            match iter.next() {
-                Some(dir) => if dir.kind() != direction.kind() {
-                    direction = dir.clone();
-                    break 'select_next_relevant_queue_result;
-                },
-                None => {
-                    break 'select_next_relevant_queue_result;
-                }
-            }
-        }
-
-        let mut new_queue = vec![];
-
-        'collect_remaining: loop {
-            match iter.next() {
-                Some(dir) => new_queue.push(dir.clone()),
-                None => {
-                    break 'collect_remaining;
-                }
-            }
-        }
-
-        queue = new_queue;
-
-        game.tick(&direction);
-        display_game(&mut stdout, &game)?;
-
-        while now.elapsed() < Duration::from_millis(if direction.kind() == DirectionKind::Horizontal {
-            100
-        } else {
-            150
-        }) {}
     }
 
     disable_raw_mode()?;
@@ -436,13 +534,20 @@ fn main() -> Result<()> {
 
 /* 
     TODO
-    - retry
-    - score
-    - settings
-    - shorten instead of die mode
-    - adapt to screen size
+    - display mode during play
+    - more modes (easy mode)
+    - save highscores (specific to mode)
+    - look at highscores in the main menue
+    
+    - windowed version
+    - upload to itch.io
 
     Done
+    - set size
+    - gamemodes
+    - score
+    - retry
     - color
     - esc & pause menue
+    - adapt to screen size
 */
