@@ -42,6 +42,8 @@ use std::{
     }
 };
 
+use serde::{Serialize, Deserialize};
+
 #[derive(Clone, PartialEq, Eq)]
 enum Direction {
     Up,
@@ -102,11 +104,13 @@ struct SnakeGame {
     max_apple_count: u32,
     min_apple_count: u32,
     ticks_between_apple_spawn: u32,
-    ticks_since_last_apple_spawned: u32
+    ticks_since_last_apple_spawned: u32,
+    easy: bool,
+    borderless: bool
 }
 
 impl SnakeGame {
-    fn create(width: usize, height: usize, game_grow_rate: u32, max_apple_count: u32, min_apple_count: u32, ticks_between_apple_spawn: u32) -> SnakeGame {
+    fn create(width: usize, height: usize, game_grow_rate: u32, max_apple_count: u32, min_apple_count: u32, ticks_between_apple_spawn: u32, easy: bool, borderless: bool) -> SnakeGame {
         let row = vec![0].repeat(width);
 
         let mut data = vec![];
@@ -126,7 +130,9 @@ impl SnakeGame {
             max_apple_count,
             min_apple_count,
             ticks_between_apple_spawn,
-            ticks_since_last_apple_spawned: 0
+            ticks_since_last_apple_spawned: 0,
+            easy,
+            borderless
         }
     }
 
@@ -141,19 +147,62 @@ impl SnakeGame {
         */
 
         // is move in bounds
-        if self.would_move_out_of_bounds(direction) {
-            self.dead = true;
-            return;
-        }
+        let new_head_pos = if self.would_move_out_of_bounds(direction) {
+            if self.borderless {
+                let mut x = self.snake_head_pos.x as i64;
+                let mut y = self.snake_head_pos.y as i64;
 
-        let new_head_pos = self.snake_head_pos.moved_direction(direction);
+                match direction {
+                    Direction::Up => y -= 1,
+                    Direction::Down => y += 1,
+                    Direction::Left => x -= 1,
+                    Direction::Right => x += 1
+                }
+
+                x %= self.data[0].len() as i64;
+                y %= self.data.len() as i64;
+
+                if x < 0 {
+                    x = (self.data[0].len() - 1) as i64;
+                }
+
+                if y < 0 {
+                    y = (self.data.len() - 1) as i64;
+                }
+
+                SnakeGameCord {
+                    x: x as usize,
+                    y: y as usize
+                }
+            } else {
+                if ! self.easy {
+                    self.dead = true;
+                    return;
+                }
+
+                self.snake_saturation_len -= 1;
+                self.snake_len -= 1;
+                self.snake_head_pos.clone()
+            }
+        } else {
+            self.snake_head_pos.moved_direction(direction)
+        };
 
         let value_at_new_head_pos = self.data[new_head_pos.y][new_head_pos.x];
 
         // is move into body
         if value_at_new_head_pos > 0 {
-            self.dead = true;
-            return;
+            if self.easy {
+                self.snake_saturation_len -= 1;
+                self.snake_len -= 1;
+            } else {
+                self.dead = true;
+                return;
+            }
+        } else {
+            // put head
+            self.data[new_head_pos.y][new_head_pos.x] = self.snake_len as i32;
+            self.snake_head_pos = new_head_pos;
         }
 
         // is move into apple
@@ -169,10 +218,6 @@ impl SnakeGame {
             self.shorten_snake();
             self.grew_last_tick = false;
         }
-
-        // put head
-        self.data[new_head_pos.y][new_head_pos.x] = self.snake_len as i32;
-        self.snake_head_pos = new_head_pos;
 
         // respawn apple
         if self.count_apples() < self.max_apple_count {
@@ -301,11 +346,17 @@ fn calculate_margins(width: u16, height: u16) -> Result<(u16, u16)> {
 
 fn display_game(stdout: &mut Stdout, game: &SnakeGame) -> Result<()> {
     let (margin_left, margin_top) = calculate_margins(game.data[0].len() as u16 * 2, game.data.len() as u16)?;
+
+    let border = if game.borderless {
+        "@"
+    } else {
+        "#"
+    };
     
-    execute!(stdout, MoveTo(margin_left, margin_top), Print(String::from("#").repeat(game.data[0].len() * 2 + 2)))?;
+    execute!(stdout, MoveTo(margin_left, margin_top), Print(String::from(border).repeat(game.data[0].len() * 2 + 2)))?;
 
     for (y, row) in game.data.iter().enumerate() {
-        execute!(stdout, MoveTo(margin_left, y as u16 + 1 + margin_top), Print("#"))?;
+        execute!(stdout, MoveTo(margin_left, y as u16 + 1 + margin_top), Print(border))?;
 
         for col in row {
             match *col {
@@ -315,10 +366,10 @@ fn display_game(stdout: &mut Stdout, game: &SnakeGame) -> Result<()> {
             }
         }
 
-        execute!(stdout, Print("#"))?;
+        execute!(stdout, Print(border))?;
     }
 
-    execute!(stdout, MoveTo(margin_left, game.data.len() as u16 + 1 + margin_top), Print(String::from("#").repeat(game.data[0].len() * 2 + 2)))?;
+    execute!(stdout, MoveTo(margin_left, game.data.len() as u16 + 1 + margin_top), Print(String::from(border).repeat(game.data[0].len() * 2 + 2)))?;
 
     Ok(())
 }
@@ -669,44 +720,84 @@ fn set_snake_settings(stdout: &mut Stdout, game_grow_rate: &mut u32, steps_per_s
     Ok(())
 }
 
-enum DisplayMode {
-    Slim,
-    Blocky
+fn set_tweaks(stdout: &mut Stdout, easy: &mut bool, borderless: &mut bool) -> Result<()> {
+    'settings: loop {
+        match menue(stdout, 80, 20, Some("Tweaks"), &[
+            format!("IMMORTAL: {}", easy).as_str(), 
+            format!("BORDERLESS: {}", borderless).as_str(), 
+            "DONE"
+        ])? {
+            0 => *easy = !*easy,
+            1 => *borderless = !*borderless,
+            _ => break 'settings
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize)]
+struct Config {
+    width: usize,
+    height: usize,
+    min_apple_count: u32,
+    max_apple_count: u32,
+    ticks_between_apple_spawn: u32,
+    game_grow_rate: u32,
+    steps_per_second: u32,
+    easy: bool,
+    borderless: bool
+}
+
+impl std::default::Default for Config {
+    fn default() -> Self {
+        Config {
+            width: 80,
+            height: 30,
+            min_apple_count: 1,
+            max_apple_count: 1,
+            ticks_between_apple_spawn: 100,
+            game_grow_rate: 1,
+            steps_per_second: 10,
+            easy: false,
+            borderless: false
+        }
+    }
 }
 
 fn main() -> Result<()> {
     let mut stdout = stdout();
 
+    let mut cfg: Config = match confy::load::<Config>("terminal-snake", Some("settings")) {
+        Ok(res) => res,
+        Err(err) => {
+            println!("{}", err);
+            Config::default()
+        }
+    };
+
     execute!(stdout, Hide, SetBackgroundColor(Color::Black), SetForegroundColor(Color::White), EnterAlternateScreen, SetTitle("Terminal Snake"))?;
 
     enable_raw_mode()?;
 
-    let mut width: usize = 80;
-    let mut height: usize = 30;
-    let mut min_apple_count: u32 = 1;
-    let mut max_apple_count: u32 = 1;
-    let mut ticks_between_apple_spawn: u32 = 100;
-    let mut game_grow_rate: u32 = 1;
-    let mut steps_per_second: u32 = 10;
-
-    let mut display_mode = DisplayMode::Blocky;
-
     'application: loop {
         'selection: loop {     
-            let mut game = SnakeGame::create(width / 2, height, game_grow_rate, max_apple_count, min_apple_count, ticks_between_apple_spawn);
+            let mut game = SnakeGame::create(cfg.width / 2, cfg.height, cfg.game_grow_rate, cfg.max_apple_count, cfg.min_apple_count, cfg.ticks_between_apple_spawn, cfg.easy, cfg.borderless);
             
             match menue(&mut stdout, 80, 20, Some("T E R M I N A L   S N A K E"), &["PLAY", "SETTINGS", "QUIT"])? {
-                0 => play_game(&mut stdout, &mut game, steps_per_second)?,
+                0 => play_game(&mut stdout, &mut game, cfg.steps_per_second)?,
                 1 => loop {
                     match menue(&mut stdout, 80, 20, Some("SETTINGS"), &[
                         "SIZE",
                         "APPLES",
                         "SNAKE",
+                        "TWEAKS",
                         "BACK"
                     ])? {
-                        0 => set_size(&mut stdout, &mut width, &mut height)?,
-                        1 => set_apple_settings(&mut stdout, &mut min_apple_count, &mut max_apple_count, &mut ticks_between_apple_spawn)?,
-                        2 => set_snake_settings(&mut stdout, &mut game_grow_rate, &mut steps_per_second)?,
+                        0 => set_size(&mut stdout, &mut cfg.width, &mut cfg.height)?,
+                        1 => set_apple_settings(&mut stdout, &mut cfg.min_apple_count, &mut cfg.max_apple_count, &mut cfg.ticks_between_apple_spawn)?,
+                        2 => set_snake_settings(&mut stdout, &mut cfg.game_grow_rate, &mut cfg.steps_per_second)?,
+                        3 => set_tweaks(&mut stdout, &mut cfg.easy, &mut cfg.borderless)?,
                         _ => break 'selection
                     }
                 }
@@ -719,23 +810,17 @@ fn main() -> Result<()> {
 
     execute!(stdout, Show, ResetColor, LeaveAlternateScreen)?;
 
+    confy::store("terminal-snake", Some("settings"), cfg).unwrap();
+
     Ok(())
 }
 
 /* 
     TODO
-    - some things are settings (size)
-    - more settings (easy, borderless)
-    - save highscores (specific to mode)
-    - look at highscores in the main menue
-    - display mode during play
-    
-    - windowed version
-    - upload to itch.io
-
     - check compatibility
 
-    Done
+    DONE
+    - more settings (easy, borderless)
     - grapic update("[]", "()" and light gray borders)
     - set size
     - gamemodes
@@ -744,4 +829,14 @@ fn main() -> Result<()> {
     - color
     - esc & pause menue
     - adapt to screen size
+    - some things are settings (size)
+
+    DISREGARDED IDEAS (these are things that I thought about adding at one point, but currently don't intend to, let me know if you would like them implemented/done)
+    - save highscores (specific to mode)
+    - look at highscores in the main menue
+    - display mode during play
+    - alternative graphics
+    
+    - windowed version
+    - upload to itch.io
 */
