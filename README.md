@@ -13,3 +13,7 @@ Play snake in the terminal.
 ## Installation
 
 `cargo install terminal-snake`
+
+## Update
+
+Just re-run the installation command to install the latest version.
