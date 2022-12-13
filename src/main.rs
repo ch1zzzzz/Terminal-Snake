@@ -477,6 +477,13 @@ fn play_game(stdout: &mut Stdout, game: &mut SnakeGame, steps_per_second: u32) -
                             KeyCode::Down => queue.push(Direction::Down),
                             KeyCode::Left => queue.push(Direction::Left),
                             KeyCode::Right => queue.push(Direction::Right),
+                            KeyCode::Char(c) => match c.to_ascii_uppercase() {
+                                'W' => queue.push(Direction::Up),
+                                'A' => queue.push(Direction::Left),
+                                'S' => queue.push(Direction::Down),
+                                'D' => queue.push(Direction::Right),
+                                _ => {}
+                            },
                             KeyCode::Esc => match menue(stdout, 32, 9, None, &["CONTINUE", "EXIT"])? {
                                 0 => {},
                                 1 => break 'retry,
@@ -507,7 +514,13 @@ fn play_game(stdout: &mut Stdout, game: &mut SnakeGame, steps_per_second: u32) -
 
             'collect_remaining: loop {
                 match iter.next() {
-                    Some(dir) => new_queue.push(dir.clone()),
+                    Some(dir) => {
+                        new_queue.push(dir.clone());
+
+                        if new_queue.len() >= 3 {
+                            break 'collect_remaining;
+                        }
+                    },
                     None => {
                         break 'collect_remaining;
                     }
@@ -776,7 +789,7 @@ fn main() -> Result<()> {
         }
     };
 
-    execute!(stdout, Hide, SetBackgroundColor(Color::Black), SetForegroundColor(Color::White), EnterAlternateScreen, SetTitle("Terminal Snake"))?;
+    execute!(stdout, EnterAlternateScreen, Hide, SetBackgroundColor(Color::Black), SetForegroundColor(Color::White), SetTitle("Terminal Snake"))?;
 
     enable_raw_mode()?;
 
@@ -817,8 +830,8 @@ fn main() -> Result<()> {
 
 /* 
     TODO
-    - check compatibility
-
+    - all done !!!!
+    
     DONE
     - more settings (easy, borderless)
     - grapic update("[]", "()" and light gray borders)
@@ -830,12 +843,16 @@ fn main() -> Result<()> {
     - esc & pause menue
     - adapt to screen size
     - some things are settings (size)
+    - controll with wasd
+    - display length in esc-menue
+    - fix curser error on windows
 
     DISREGARDED IDEAS (these are things that I thought about adding at one point, but currently don't intend to, let me know if you would like them implemented/done)
     - save highscores (specific to mode)
     - look at highscores in the main menue
     - display mode during play
     - alternative graphics
+    - notify if run outside of terminal
     
     - windowed version
     - upload to itch.io
